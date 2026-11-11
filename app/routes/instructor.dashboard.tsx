@@ -9,6 +9,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   DollarSign,
   GraduationCap,
   Plus,
@@ -33,6 +34,14 @@ export async function loader({ request }: Route.LoaderArgs) {
 
 function formatRate(rate: number | null): string {
   return rate === null ? "—" : `${Math.round(rate * 100)}%`;
+}
+
+/**
+ * Floors rather than rounds, so a pass rate just under the 60% flag
+ * threshold (e.g. 59.5%) never displays as "60%" next to a flag.
+ */
+function formatPassRate(rate: number | null): string {
+  return rate === null ? "—" : `${Math.floor(rate * 100)}%`;
 }
 
 export function HydrateFallback() {
@@ -173,9 +182,113 @@ export default function InstructorDashboardPage({
               </table>
             </CardContent>
           </Card>
+
+          <h2 className="mt-10 mb-4 text-xl font-semibold">Quizzes</h2>
+          <div className="space-y-4">
+            {courses.map((course) => (
+              <CourseQuizzes key={course.id} course={course} />
+            ))}
+          </div>
         </>
       )}
     </div>
+  );
+}
+
+type DashboardCourse = Route.ComponentProps["loaderData"]["courses"][number];
+
+function CourseQuizzes({ course }: { course: DashboardCourse }) {
+  const flaggedCount = course.quizzes.filter((q) => q.flagged).length;
+
+  return (
+    <details className="group rounded-xl border bg-card">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-6 py-4 font-medium [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+        {course.title}
+        <span className="text-sm font-normal text-muted-foreground">
+          {course.quizzes.length}{" "}
+          {course.quizzes.length === 1 ? "quiz" : "quizzes"}
+        </span>
+        {flaggedCount > 0 && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+            <AlertTriangle className="size-3" />
+            {flaggedCount} flagged
+          </span>
+        )}
+      </summary>
+      <div className="border-t px-6 py-4">
+        {course.quizzes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            This course has no quizzes.
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-muted-foreground">
+                <th className="pb-2 font-medium">Quiz</th>
+                <th className="pb-2 text-right font-medium">Students</th>
+                <th className="pb-2 text-right font-medium">Min</th>
+                <th className="pb-2 text-right font-medium">Max</th>
+                <th className="pb-2 text-right font-medium">Average</th>
+                <th className="pb-2 text-right font-medium">Pass rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {course.quizzes.map((quiz) => (
+                <tr
+                  key={quiz.id}
+                  className={`border-b last:border-0 ${quiz.flagged ? "bg-amber-50 dark:bg-amber-950/30" : ""}`}
+                >
+                  <td className="py-3">
+                    <div className="font-medium">{quiz.title}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {quiz.lessonTitle} · pass at{" "}
+                      {formatRate(quiz.passingScore)}
+                    </div>
+                  </td>
+                  {quiz.studentCount === 0 ? (
+                    <td
+                      colSpan={5}
+                      className="py-3 text-right text-muted-foreground"
+                    >
+                      No attempts yet
+                    </td>
+                  ) : (
+                    <>
+                      <td className="py-3 text-right tabular-nums">
+                        {quiz.studentCount}
+                      </td>
+                      <td className="py-3 text-right tabular-nums">
+                        {formatRate(quiz.min)}
+                      </td>
+                      <td className="py-3 text-right tabular-nums">
+                        {formatRate(quiz.max)}
+                      </td>
+                      <td className="py-3 text-right tabular-nums">
+                        {formatRate(quiz.average)}
+                      </td>
+                      <td className="py-3 text-right tabular-nums">
+                        {quiz.flagged ? (
+                          <span
+                            className="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400"
+                            title="Fewer than 60% of students pass this quiz"
+                          >
+                            <AlertTriangle className="size-3.5" />
+                            {formatPassRate(quiz.passRate)}
+                          </span>
+                        ) : (
+                          formatPassRate(quiz.passRate)
+                        )}
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </details>
   );
 }
 
