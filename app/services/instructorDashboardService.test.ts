@@ -77,6 +77,61 @@ function addPurchase(
     .get();
 }
 
+function addModule(courseId: number, position: number) {
+  return testDb
+    .insert(schema.modules)
+    .values({ courseId, title: `Module ${position}`, position })
+    .returning()
+    .get();
+}
+
+function addLesson(moduleId: number, position: number, title = `Lesson ${position}`) {
+  return testDb
+    .insert(schema.lessons)
+    .values({ moduleId, title, position })
+    .returning()
+    .get();
+}
+
+function addQuizOnLesson(lessonId: number, passingScore = 0.7, title = "Quiz") {
+  return testDb
+    .insert(schema.quizzes)
+    .values({ lessonId, title, passingScore })
+    .returning()
+    .get();
+}
+
+/** A quiz on a fresh lesson ("<title> lesson") in a fresh module of the course. */
+function addQuiz(courseId: number, passingScore = 0.7, title = "Quiz") {
+  const mod = addModule(courseId, 1);
+  const lesson = addLesson(mod.id, 1, `${title} lesson`);
+  return addQuizOnLesson(lesson.id, passingScore, title);
+}
+
+function addAttempt(userId: number, quizId: number, score: number) {
+  return testDb
+    .insert(schema.quizAttempts)
+    // `passed` is deliberately always false: the dashboard must judge passing
+    // against the quiz's own passingScore, not the stored flag.
+    .values({ userId, quizId, score, passed: false })
+    .returning()
+    .get();
+}
+
+/** Records one attempt per score, each by a new student. */
+function addAttempts(quizId: number, scores: number[]) {
+  for (const score of scores) addAttempt(addStudent().id, quizId, score);
+}
+
+function quizzesOf(
+  dashboard: ReturnType<typeof getInstructorDashboard>,
+  courseId: number
+) {
+  const course = dashboard.courses.find((c) => c.id === courseId);
+  if (!course) throw new Error(`course ${courseId} not on dashboard`);
+  return course.quizzes;
+}
+
 describe("instructorDashboardService", () => {
   beforeEach(() => {
     testDb = createTestDb();
@@ -195,6 +250,140 @@ describe("instructorDashboardService", () => {
 
       expect(dashboard.summary.totalEnrollments).toBe(0);
       expect(dashboard.summary.completionRate).toBeNull();
+    });
+
+    describe("quiz breakdown", () => {
+      it("counts only each student's best attempt", () => {
+        const quiz = addQuiz(base.course.id, 0.7);
+        const retrier = addStudent();
+        addAttempt(retrier.id, quiz.id, 0.2);
+        addAttempt(retrier.id, quiz.id, 0.9);
+        addAttempt(retrier.id, quiz.id, 0.5);
+        addAttempt(addStudent().id, quiz.id, 0.4);
+
+        const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+        expect(row.studentCount).toBe(2);
+        expect(row.min).toBe(0.4);
+        expect(row.max).toBe(0.9);
+        expect(row.average).toBeCloseTo(0.65);
+        expect(row.passRate).toBe(0.5);
+      });
+
+      it("keeps a student's best attempt on one quiz from counting toward another", () => {
+        const first = addQuiz(base.course.id, 0.7, "First");
+        const second = addQuiz(base.course.id, 0.7, "Second");
+        const student = addStudent();
+        addAttempt(student.id, first.id, 0.9);
+        addAttempt(student.id, second.id, 0.3);
+
+        const rows = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+        const byId = new Map(rows.map((q) => [q.id, q]));
+
+        expect(byId.get(first.id)).toMatchObject({ studentCount: 1, max: 0.9, passRate: 1 });
+        expect(byId.get(second.id)).toMatchObject({ studentCount: 1, max: 0.3, passRate: 0 });
+      });
+
+      it("reports min, max, and average over students' best scores", () => {
+        const quiz = addQuiz(base.course.id, 0.5, "Basics");
+        addAttempts(quiz.id, [0.6, 1, 0.2, 0.8]);
+
+        const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+        expect(row).toMatchObject({
+          id: quiz.id,
+          title: "Basics",
+          lessonTitle: "Basics lesson",
+          passingScore: 0.5,
+          studentCount: 4,
+          min: 0.2,
+          max: 1,
+        });
+        expect(row.average).toBeCloseTo(0.65);
+      });
+
+      it("measures pass rate against each quiz's own passing score, a score equal to it passing", () => {
+        const easy = addQuiz(base.course.id, 0.5, "Easy");
+        const hard = addQuiz(base.course.id, 0.9, "Hard");
+        addAttempts(easy.id, [0.5, 0.6, 0.9, 0.95]);
+        addAttempts(hard.id, [0.5, 0.6, 0.9, 0.95]);
+
+        const rows = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+        const byId = new Map(rows.map((q) => [q.id, q]));
+
+        expect(byId.get(easy.id)?.passRate).toBe(1);
+        expect(byId.get(hard.id)?.passRate).toBe(0.5);
+      });
+
+      it("flags quizzes whose pass rate is below 60%", () => {
+        const atThreshold = addQuiz(base.course.id, 0.7, "At threshold");
+        const below = addQuiz(base.course.id, 0.7, "Below");
+        addAttempts(atThreshold.id, [0.8, 0.8, 0.8, 0.1, 0.1]); // 3 of 5 = 60%
+        addAttempts(below.id, [0.8, 0.1]); // 1 of 2 = 50%
+
+        const rows = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+        const byId = new Map(rows.map((q) => [q.id, q]));
+
+        expect(byId.get(atThreshold.id)?.passRate).toBe(0.6);
+        expect(byId.get(atThreshold.id)?.flagged).toBe(false);
+        expect(byId.get(below.id)?.flagged).toBe(true);
+      });
+
+      it("lists every quiz in course order: module position, then lesson position", () => {
+        // inserted out of order so id order and position order disagree
+        const second = addModule(base.course.id, 2);
+        const first = addModule(base.course.id, 1);
+        const q2b = addQuizOnLesson(addLesson(second.id, 2).id, 0.7, "2.2");
+        const q1b = addQuizOnLesson(addLesson(first.id, 2).id, 0.7, "1.2");
+        const q2a = addQuizOnLesson(addLesson(second.id, 1).id, 0.7, "2.1");
+        const q1a = addQuizOnLesson(addLesson(first.id, 1).id, 0.7, "1.1");
+
+        const rows = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+        expect(rows.map((q) => q.id)).toEqual([q1a.id, q1b.id, q2a.id, q2b.id]);
+      });
+
+      it("returns null statistics and no flag for a quiz nobody has attempted", () => {
+        const quiz = addQuiz(base.course.id, 0.7, "Untouched");
+
+        const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+        expect(row).toEqual({
+          id: quiz.id,
+          title: "Untouched",
+          lessonTitle: "Untouched lesson",
+          passingScore: 0.7,
+          studentCount: 0,
+          min: null,
+          max: null,
+          average: null,
+          passRate: null,
+          flagged: false,
+        });
+      });
+
+      it("keeps each course's quizzes separate and leaves out out-of-scope courses' quizzes", () => {
+        const archived = addCourse(base.instructor.id, schema.CourseStatus.Archived);
+        const draft = addCourse(base.instructor.id, schema.CourseStatus.Draft);
+        const othersCourse = addCourse(addInstructor().id, schema.CourseStatus.Published);
+        const noQuizzes = addCourse(base.instructor.id, schema.CourseStatus.Published);
+
+        const mine = addQuiz(base.course.id);
+        const archivedQuiz = addQuiz(archived.id);
+        const draftQuiz = addQuiz(draft.id);
+        const othersQuiz = addQuiz(othersCourse.id);
+        addAttempts(draftQuiz.id, [1]);
+        addAttempts(othersQuiz.id, [1]);
+
+        const dashboard = getInstructorDashboard(base.instructor.id);
+        const allQuizIds = dashboard.courses.flatMap((c) => c.quizzes.map((q) => q.id));
+
+        expect(quizzesOf(dashboard, base.course.id).map((q) => q.id)).toEqual([mine.id]);
+        expect(quizzesOf(dashboard, archived.id).map((q) => q.id)).toEqual([archivedQuiz.id]);
+        expect(quizzesOf(dashboard, noQuizzes.id)).toEqual([]);
+        expect(allQuizIds).not.toContain(draftQuiz.id);
+        expect(allQuizIds).not.toContain(othersQuiz.id);
+      });
     });
   });
 });
