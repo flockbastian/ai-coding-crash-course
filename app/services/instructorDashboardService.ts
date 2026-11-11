@@ -19,6 +19,9 @@ import {
 /** Quizzes whose pass rate falls below this are flagged as problem quizzes. */
 const FLAG_PASS_RATE = 0.6;
 
+/** Below this many students, quintiles are too noisy to report. */
+const MIN_STUDENTS_FOR_QUINTILES = 5;
+
 export function getInstructorDashboard(instructorId: number) {
   const instructorCourses = db
     .select({
@@ -168,6 +171,10 @@ export type QuizStats = QuizInfo & {
   average: number | null;
   passRate: number | null;
   flagged: boolean;
+  p20: number | null;
+  p40: number | null;
+  p60: number | null;
+  p80: number | null;
 };
 
 /** Stats over one best score (0–1) per student; null stats when there are none. */
@@ -182,12 +189,18 @@ function quizStats(quiz: QuizInfo, bestScores: number[]): QuizStats {
       average: null,
       passRate: null,
       flagged: false,
+      p20: null,
+      p40: null,
+      p60: null,
+      p80: null,
     };
   }
 
   const sorted = [...bestScores].sort((a, b) => a - b);
   const passing = sorted.filter((s) => s >= quiz.passingScore).length;
   const passRate = passing / studentCount;
+  const hasQuintiles = studentCount >= MIN_STUDENTS_FOR_QUINTILES;
+  const quintile = (p: number) => (hasQuintiles ? percentile(sorted, p) : null);
   return {
     ...quiz,
     studentCount,
@@ -196,5 +209,21 @@ function quizStats(quiz: QuizInfo, bestScores: number[]): QuizStats {
     average: sorted.reduce((sum, s) => sum + s, 0) / studentCount,
     passRate,
     flagged: passRate < FLAG_PASS_RATE,
+    p20: quintile(0.2),
+    p40: quintile(0.4),
+    p60: quintile(0.6),
+    p80: quintile(0.8),
   };
+}
+
+/**
+ * The p-th percentile (0–1) of ascending, non-empty scores, by linear
+ * interpolation: rank = p × (n − 1), then interpolate between the scores
+ * either side of that rank.
+ */
+function percentile(sorted: number[], p: number): number {
+  const rank = p * (sorted.length - 1);
+  const lower = Math.floor(rank);
+  const upper = Math.ceil(rank);
+  return sorted[lower] + (rank - lower) * (sorted[upper] - sorted[lower]);
 }

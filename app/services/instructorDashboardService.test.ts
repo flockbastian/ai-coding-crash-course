@@ -359,6 +359,129 @@ describe("instructorDashboardService", () => {
           average: null,
           passRate: null,
           flagged: false,
+          p20: null,
+          p40: null,
+          p60: null,
+          p80: null,
+        });
+      });
+
+      describe("quintiles", () => {
+        // Expected values worked by hand: rank = p × (n − 1) into the sorted
+        // best scores, interpolating linearly between the scores either side.
+
+        it("gives quintiles to exactly 5 students, interpolating between neighbouring scores", () => {
+          const quiz = addQuiz(base.course.id);
+          addAttempts(quiz.id, [0.2, 0.4, 0.6, 0.8, 1]);
+
+          const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+          // ranks 0.8, 1.6, 2.4, 3.2
+          expect(row.p20).toBeCloseTo(0.36, 10); // 0.2 + 0.8 × 0.2
+          expect(row.p40).toBeCloseTo(0.52, 10); // 0.4 + 0.6 × 0.2
+          expect(row.p60).toBeCloseTo(0.68, 10); // 0.6 + 0.4 × 0.2
+          expect(row.p80).toBeCloseTo(0.84, 10); // 0.8 + 0.2 × 0.2
+        });
+
+        it("interpolates over uneven gaps, whatever order the scores were recorded in", () => {
+          const quiz = addQuiz(base.course.id);
+          // sorted: 0.1, 0.2, 0.4, 0.5, 0.7, 0.75, 1 (n = 7)
+          addAttempts(quiz.id, [0.7, 0.1, 1, 0.4, 0.75, 0.2, 0.5]);
+
+          const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+          // ranks 1.2, 2.4, 3.6, 4.8
+          expect(row.p20).toBeCloseTo(0.24, 10); // 0.2 + 0.2 × (0.4 − 0.2)
+          expect(row.p40).toBeCloseTo(0.44, 10); // 0.4 + 0.4 × (0.5 − 0.4)
+          expect(row.p60).toBeCloseTo(0.62, 10); // 0.5 + 0.6 × (0.7 − 0.5)
+          expect(row.p80).toBeCloseTo(0.74, 10); // 0.7 + 0.8 × (0.75 − 0.7)
+          expect(row.min).toBe(0.1);
+          expect(row.max).toBe(1);
+        });
+
+        it("leaves quintiles null under 5 students but still reports min, max, average, and pass rate", () => {
+          const quiz = addQuiz(base.course.id, 0.5);
+          addAttempts(quiz.id, [0.6, 1, 0.2, 0.8]);
+
+          const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+          expect(row).toMatchObject({
+            studentCount: 4,
+            min: 0.2,
+            max: 1,
+            passRate: 0.75,
+            p20: null,
+            p40: null,
+            p60: null,
+            p80: null,
+          });
+          expect(row.average).toBeCloseTo(0.65);
+        });
+
+        it("counts students, not attempts, toward the 5-student minimum", () => {
+          const quiz = addQuiz(base.course.id);
+          const retrier = addStudent();
+          addAttempt(retrier.id, quiz.id, 0.3);
+          addAttempt(retrier.id, quiz.id, 0.6);
+          addAttempts(quiz.id, [0.5, 0.7, 0.9]);
+
+          const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+          expect(row).toMatchObject({
+            studentCount: 4,
+            p20: null,
+            p40: null,
+            p60: null,
+            p80: null,
+          });
+        });
+
+        it("uses the score itself when the rank lands exactly on a student", () => {
+          const quiz = addQuiz(base.course.id);
+          addAttempts(quiz.id, [0.6, 0.1, 0.5, 0.2, 0.4, 0.3]);
+
+          const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+          // n = 6: ranks 1, 2, 3, 4 into 0.1, 0.2, 0.3, 0.4, 0.5, 0.6
+          expect(row.p20).toBeCloseTo(0.2, 10);
+          expect(row.p40).toBeCloseTo(0.3, 10);
+          expect(row.p60).toBeCloseTo(0.4, 10);
+          expect(row.p80).toBeCloseTo(0.5, 10);
+        });
+
+        it("handles tied scores and the 0 and 1 extremes", () => {
+          const quiz = addQuiz(base.course.id);
+          addAttempts(quiz.id, [1, 0, 0, 1, 0]);
+
+          const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+          // sorted 0, 0, 0, 1, 1; ranks 0.8, 1.6, 2.4, 3.2
+          expect(row).toMatchObject({ min: 0, max: 1, p20: 0, p40: 0, p80: 1 });
+          expect(row.p60).toBeCloseTo(0.4, 10); // 0 + 0.4 × (1 − 0)
+        });
+
+        it("computes quintiles from each student's best attempt only", () => {
+          const quiz = addQuiz(base.course.id);
+          // best scores 0.2, 0.4, 0.6, 0.8, 1 — the same as the 5-student case
+          const students = [addStudent(), addStudent(), addStudent(), addStudent(), addStudent()];
+          addAttempt(students[0].id, quiz.id, 0);
+          addAttempt(students[0].id, quiz.id, 0.2);
+          addAttempt(students[1].id, quiz.id, 0.4);
+          addAttempt(students[1].id, quiz.id, 0.1);
+          addAttempt(students[2].id, quiz.id, 0.05);
+          addAttempt(students[2].id, quiz.id, 0.6);
+          addAttempt(students[2].id, quiz.id, 0.3);
+          addAttempt(students[3].id, quiz.id, 0.8);
+          addAttempt(students[4].id, quiz.id, 0.15);
+          addAttempt(students[4].id, quiz.id, 1);
+
+          const [row] = quizzesOf(getInstructorDashboard(base.instructor.id), base.course.id);
+
+          expect(row.studentCount).toBe(5);
+          expect(row.p20).toBeCloseTo(0.36, 10);
+          expect(row.p40).toBeCloseTo(0.52, 10);
+          expect(row.p60).toBeCloseTo(0.68, 10);
+          expect(row.p80).toBeCloseTo(0.84, 10);
         });
       });
 
