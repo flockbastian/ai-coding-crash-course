@@ -228,9 +228,14 @@ function CourseQuizzes({ course }: { course: DashboardCourse }) {
                 <th className="pb-2 font-medium">Quiz</th>
                 <th className="pb-2 text-right font-medium">Students</th>
                 <th className="pb-2 text-right font-medium">Min</th>
+                <th className="pb-2 text-right font-medium">P20</th>
+                <th className="pb-2 text-right font-medium">P40</th>
+                <th className="pb-2 text-right font-medium">P60</th>
+                <th className="pb-2 text-right font-medium">P80</th>
                 <th className="pb-2 text-right font-medium">Max</th>
                 <th className="pb-2 text-right font-medium">Average</th>
                 <th className="pb-2 text-right font-medium">Pass rate</th>
+                <th className="pb-2 pl-6 font-medium">Spread</th>
               </tr>
             </thead>
             <tbody>
@@ -248,7 +253,7 @@ function CourseQuizzes({ course }: { course: DashboardCourse }) {
                   </td>
                   {quiz.studentCount === 0 ? (
                     <td
-                      colSpan={5}
+                      colSpan={10}
                       className="py-3 text-right text-muted-foreground"
                     >
                       No attempts yet
@@ -261,6 +266,14 @@ function CourseQuizzes({ course }: { course: DashboardCourse }) {
                       <td className="py-3 text-right tabular-nums">
                         {formatRate(quiz.min)}
                       </td>
+                      {QUINTILES.map((key) => (
+                        <td
+                          key={key}
+                          className="py-3 text-right tabular-nums text-muted-foreground"
+                        >
+                          {formatRate(quiz[key])}
+                        </td>
+                      ))}
                       <td className="py-3 text-right tabular-nums">
                         {formatRate(quiz.max)}
                       </td>
@@ -280,6 +293,9 @@ function CourseQuizzes({ course }: { course: DashboardCourse }) {
                           formatPassRate(quiz.passRate)
                         )}
                       </td>
+                      <td className="py-3 pl-6">
+                        <SpreadBar quiz={quiz} />
+                      </td>
                     </>
                   )}
                 </tr>
@@ -289,6 +305,69 @@ function CourseQuizzes({ course }: { course: DashboardCourse }) {
         )}
       </div>
     </details>
+  );
+}
+
+const QUINTILES = ["p20", "p40", "p60", "p80"] as const;
+
+type DashboardQuiz = DashboardCourse["quizzes"][number];
+
+/** A 0–1 fraction as a CSS percentage, to two decimals. */
+function pct(fraction: number): string {
+  return `${Math.round(fraction * 10000) / 100}%`;
+}
+
+/**
+ * CSS-only spread of best scores on a 0–100% track: a band from min to max,
+ * ticks at the quintiles (when there are enough students for them), and a
+ * taller line at the quiz's passing score. Renders nothing without attempts.
+ */
+function SpreadBar({ quiz }: { quiz: DashboardQuiz }) {
+  if (quiz.min === null || quiz.max === null) return null;
+
+  const quintiles = QUINTILES.flatMap((key) => {
+    const value = quiz[key];
+    return value === null ? [] : [`${key.toUpperCase()} ${formatRate(value)}`];
+  });
+  const label = [
+    `Scores from ${formatRate(quiz.min)} to ${formatRate(quiz.max)}`,
+    ...quintiles,
+    `passing score ${formatRate(quiz.passingScore)}`,
+  ].join(", ");
+
+  return (
+    <div
+      className="relative h-3 w-40 rounded-full bg-muted"
+      role="img"
+      aria-label={label}
+    >
+      <div
+        className="absolute inset-y-0 min-w-1 rounded-full bg-primary/30"
+        // Clamped so a min-width band at 100% stays inside the track.
+        style={{
+          left: `min(${pct(quiz.min)}, calc(100% - 0.25rem))`,
+          width: pct(quiz.max - quiz.min),
+        }}
+        title={`${formatRate(quiz.min)}–${formatRate(quiz.max)}`}
+      />
+      {QUINTILES.map((key) => {
+        const value = quiz[key];
+        if (value === null) return null;
+        return (
+          <div
+            key={key}
+            className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-primary"
+            style={{ left: pct(value) }}
+            title={`${key.toUpperCase()}: ${formatRate(value)}`}
+          />
+        );
+      })}
+      <div
+        className="absolute -inset-y-1 w-0.5 -translate-x-1/2 bg-amber-600 dark:bg-amber-400"
+        style={{ left: pct(quiz.passingScore) }}
+        title={`Pass at ${formatRate(quiz.passingScore)}`}
+      />
+    </div>
   );
 }
 
