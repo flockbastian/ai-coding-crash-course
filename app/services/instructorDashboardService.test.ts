@@ -32,6 +32,19 @@ function addStudent() {
     .get();
 }
 
+function addInstructor() {
+  userCounter++;
+  return testDb
+    .insert(schema.users)
+    .values({
+      name: `Instructor ${userCounter}`,
+      email: `instructor${userCounter}@example.com`,
+      role: schema.UserRole.Instructor,
+    })
+    .returning()
+    .get();
+}
+
 let courseCounter = 0;
 
 function addCourse(instructorId: number, status: schema.CourseStatus) {
@@ -51,10 +64,15 @@ function addCourse(instructorId: number, status: schema.CourseStatus) {
     .get();
 }
 
-function addPurchase(userId: number, courseId: number, amountPaid: number) {
+function addPurchase(
+  userId: number,
+  courseId: number,
+  amountPaid: number,
+  country: string | null = null
+) {
   return testDb
     .insert(schema.purchases)
-    .values({ userId, courseId, amountPaid, country: null })
+    .values({ userId, courseId, amountPaid, country })
     .returning()
     .get();
 }
@@ -78,18 +96,20 @@ describe("instructorDashboardService", () => {
       expect(dashboard.courses[0].earnings).toBe(7499);
     });
 
+    it("counts PPP-discounted purchases at the reduced amount actually paid", () => {
+      // list price 9999; a purchase from India at the PPP price
+      addPurchase(addStudent().id, base.course.id, 9999, "US");
+      addPurchase(addStudent().id, base.course.id, 3000, "IN");
+
+      const dashboard = getInstructorDashboard(base.instructor.id);
+
+      expect(dashboard.courses[0].earnings).toBe(12999);
+    });
+
     it("includes published and archived courses but not drafts or other instructors' courses", () => {
       const archived = addCourse(base.instructor.id, schema.CourseStatus.Archived);
       const draft = addCourse(base.instructor.id, schema.CourseStatus.Draft);
-      const otherInstructor = testDb
-        .insert(schema.users)
-        .values({
-          name: "Other Instructor",
-          email: "other@example.com",
-          role: schema.UserRole.Instructor,
-        })
-        .returning()
-        .get();
+      const otherInstructor = addInstructor();
       const othersCourse = addCourse(otherInstructor.id, schema.CourseStatus.Published);
 
       addPurchase(addStudent().id, archived.id, 1000);
@@ -115,15 +135,7 @@ describe("instructorDashboardService", () => {
 
     it("returns no courses and zeroed totals for an instructor with nothing published", () => {
       addCourse(base.instructor.id, schema.CourseStatus.Draft);
-      const newInstructor = testDb
-        .insert(schema.users)
-        .values({
-          name: "New Instructor",
-          email: "new@example.com",
-          role: schema.UserRole.Instructor,
-        })
-        .returning()
-        .get();
+      const newInstructor = addInstructor();
 
       const dashboard = getInstructorDashboard(newInstructor.id);
 

@@ -3,14 +3,15 @@ import { db } from "~/db";
 import { CourseStatus, courses, enrollments, purchases } from "~/db/schema";
 
 // ─── Instructor Dashboard Service ───
-// Aggregates earnings and enrollment stats across an instructor's courses.
+// Aggregates earnings and enrollment stats across an instructor's published
+// and archived courses, for the instructor dashboard.
+// Uses positional parameters (project convention).
 
 export function getInstructorDashboard(instructorId: number) {
   const instructorCourses = db
     .select({
       id: courses.id,
       title: courses.title,
-      slug: courses.slug,
       status: courses.status,
     })
     .from(courses)
@@ -51,7 +52,7 @@ export function getInstructorDashboard(instructorId: number) {
       .map((r) => [r.courseId, r])
   );
 
-  const rows = instructorCourses.map((course) => {
+  const courseStats = instructorCourses.map((course) => {
     const counts = enrollmentsByCourse.get(course.id);
     const total = counts?.total ?? 0;
     const completed = counts?.completed ?? 0;
@@ -64,9 +65,9 @@ export function getInstructorDashboard(instructorId: number) {
     };
   });
 
-  const totalEarnings = rows.reduce((sum, c) => sum + c.earnings, 0);
-  const totalEnrollments = rows.reduce((sum, c) => sum + c.enrollments, 0);
-  const completedEnrollments = rows.reduce(
+  const totalEarnings = courseStats.reduce((sum, c) => sum + c.earnings, 0);
+  const totalEnrollments = courseStats.reduce((sum, c) => sum + c.enrollments, 0);
+  const completedEnrollments = courseStats.reduce(
     (sum, c) => sum + c.completedEnrollments,
     0
   );
@@ -78,7 +79,7 @@ export function getInstructorDashboard(instructorId: number) {
       completedEnrollments,
       completionRate: rate(completedEnrollments, totalEnrollments),
     },
-    courses: rows,
+    courses: courseStats,
   };
 }
 
